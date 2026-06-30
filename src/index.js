@@ -1,14 +1,9 @@
-import express from 'express';
+import { createApp } from './app.js';
 import { config } from './config.js';
 import { ensureDb } from './db.js';
-import { credentialsRouter } from './routes/credentials.js';
 import { resumeConsumers } from './manager.js';
 
-const app = express();
-app.use(express.json());
-
-app.get('/health', (_req, res) => res.json({ ok: true }));
-app.use('/v1', credentialsRouter);
+const app = createApp();
 
 async function start() {
   try {
