@@ -44,6 +44,11 @@ credentialsRouter.post('/credentials', async (req, res) => {
     });
     ensureConsumer(clinicId, reg.token);
 
+    // Token-free receipt log (never print the JWT). Confirms the push arrived + was stored.
+    console.log(
+      `[credentials] received HealthPlix token for clinic ${clinicId} (account ${accountId}) ` +
+        `— stored, consumer ensured (alreadyLinked=${reg.alreadyLinked ?? false})`,
+    );
     return res.json({ ok: true, alreadyLinked: reg.alreadyLinked ?? false });
   } catch (e) {
     if (e.status === 401) return res.status(401).json({ ok: false, error: 'invalid clinica jwt' });
@@ -62,6 +67,7 @@ credentialsRouter.delete('/credentials', async (req, res) => {
 
   await revokeCredentials(clinicId);
   stopConsumer(clinicId);
+  console.log(`[credentials] revoked HealthPlix creds for clinic ${clinicId} — consumer stopped`);
   return res.json({ ok: true });
 });
 
