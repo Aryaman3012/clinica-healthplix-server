@@ -75,10 +75,11 @@ const fake = await startFakePortal();
 process.env.CLINICA_PORTAL_URL = fake.url;
 process.env.COUCHDB_DB = 'healthplix_credentials_inttest';
 process.env.COUCHDB_URL = process.env.COUCHDB_URL || 'http://admin:password@localhost:5984';
+process.env.INTAKE_KEY = 'test-intake-key';
 
 const { config } = await import('../src/config.js');
 const { createApp } = await import('../src/app.js');
-const { ensureDb, getCredentials } = await import('../src/db.js');
+const { ensureDb, getCredentials, getPending } = await import('../src/db.js');
 const { StreamConsumer } = await import('../src/clinica/stream.js');
 const { ensureConsumer, stopConsumer } = await import('../src/manager.js');
 
@@ -159,5 +160,50 @@ test(
     assert.equal((await getCredentials('clinicInt1')).revoked, true);
 
     stopConsumer('clinicInt1');
+  },
+);
+
+// --- Test 3: intake fallback gate (no CouchDB needed for the reject paths) ------------
+
+test('intake fallback rejects without the shared key', async () => {
+  const server = createApp().listen(0);
+  after(() => server.close());
+  const baseUrl = `http://localhost:${server.address().port}`;
+  const body = JSON.stringify({ healthplix: { token: 'hp.tok', branchId: 'b9' } });
+
+  // no key → 401
+  let res = await fetch(`${baseUrl}/v1/intake/credentials`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+  });
+  assert.equal(res.status, 401);
+
+  // wrong key → 401
+  res = await fetch(`${baseUrl}/v1/intake/credentials`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Intake-Key': 'nope' }, body,
+  });
+  assert.equal(res.status, 401);
+});
+
+test(
+  'intake fallback stores a pending doc with the correct key',
+  { skip: HAVE_COUCH ? false : 'no CouchDB reachable (set COUCHDB_URL)' },
+  async () => {
+    await ensureDb();
+    const server = createApp().listen(0);
+    after(() => server.close());
+    const baseUrl = `http://localhost:${server.address().port}`;
+
+    const res = await fetch(`${baseUrl}/v1/intake/credentials`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Intake-Key': 'test-intake-key' },
+      body: JSON.stringify({ healthplix: { token: 'hp.pending.tok', branchId: 'bPending' } }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).pending, true);
+
+    const pending = await getPending('bPending');
+    assert.ok(pending, 'pending doc created');
+    assert.equal(pending.healthplix.token, 'hp.pending.tok');
+    assert.equal(pending.linked, false);
   },
 );

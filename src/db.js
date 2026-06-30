@@ -74,3 +74,35 @@ export async function listActiveCredentials() {
   });
   return r?.docs ?? [];
 }
+
+// --- Pending (unlinked) credentials — the fallback when no Clinica JWT is available yet.
+// Keyed by HealthPlix account id (branchId/doctorRoleId) since there's no clinic id yet.
+
+const pendingId = (accountId) => `healthplix:pending:${accountId}`;
+
+export async function getPending(accountId) {
+  return couch('GET', `/${encodeURIComponent(pendingId(accountId))}`);
+}
+
+export async function upsertPendingCredentials(accountId, healthplix) {
+  const existing = await getPending(accountId);
+  const doc = {
+    ...(existing ?? {}),
+    _id: pendingId(accountId),
+    type: 'healthplix_pending_credentials',
+    accountId,
+    healthplix,
+    linked: false,
+    updatedAt: new Date().toISOString(),
+  };
+  if (existing?._rev) doc._rev = existing._rev;
+  const r = await couch('PUT', `/${encodeURIComponent(doc._id)}`, doc);
+  return { ...doc, _rev: r.rev };
+}
+
+// Called once a real (authed) registration links this account — best-effort cleanup.
+export async function deletePending(accountId) {
+  const existing = await getPending(accountId);
+  if (!existing?._rev) return;
+  await couch('DELETE', `/${encodeURIComponent(existing._id)}?rev=${existing._rev}`);
+}

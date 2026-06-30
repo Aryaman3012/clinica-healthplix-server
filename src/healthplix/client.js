@@ -60,3 +60,25 @@ export async function pushPatientToHealthplix(clinicId, patient) {
   // TODO: port from the old extension api/healthplix.js.
   throw new Error('pushPatientToHealthplix not implemented — port the deleted replay logic');
 }
+
+// --- Intake data dump (fallback) -------------------------------------------------------
+// Replaces the old extension dumpHealthplixToIntake / archiveRecentAppointmentsToIntake.
+// Pulls all required HealthPlix data using the given creds and stores it to the DB,
+// independent of Clinica linking. Takes the identity directly so it works for both linked
+// and pending (unlinked) credentials.
+//
+// fetchJson() lets you call HealthPlix with an explicit token (pending creds have no clinicId).
+export async function fetchJson(healthplix, path, options = {}) {
+  const res = await fetch(`${BASE}${path}`, {
+    ...options,
+    headers: { ...headers(healthplix), ...(options.headers ?? {}) },
+  });
+  if (!res.ok) throw new Error(`HealthPlix API ${res.status}: ${path}`);
+  return res.json();
+}
+
+export async function dumpHealthplixData(healthplix) {
+  // TODO: port the old dumpHealthplixToIntake / archiveRecentAppointmentsToIntake logic.
+  // Use fetchJson(healthplix, '/...') to pull appointments + patients, then persist via db.
+  throw new Error('dumpHealthplixData not implemented — port the deleted intake logic');
+}
