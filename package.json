@@ -1,0 +1,18 @@
+{
+  "name": "clinica-healthplix-server",
+  "version": "1.0.0",
+  "description": "Replay server for the Clinica × HealthPlix courier extension. Receives HealthPlix credentials from the extension, consumes Clinica events via SSE, and replays them to the HealthPlix API.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
