@@ -8,7 +8,7 @@ import { registerWithClinica } from '../clinica/register.js';
 import { clinicIdFromJwt } from '../jwt.js';
 import { upsertCredentials, revokeCredentials, getCredentials, deletePending, recordOnboarding } from '../db.js';
 import { ensureConsumer, stopConsumer } from '../manager.js';
-import { bestEffortDump } from '../dump.js';
+import { bestEffortDumpAndSync } from '../dump.js';
 
 export const credentialsRouter = Router();
 
@@ -60,7 +60,8 @@ credentialsRouter.post('/credentials', async (req, res) => {
       await recordOnboarding(String(accountId), new Date().toISOString()); // first-seen = onboarding
       await deletePending(accountId).catch(() => {});
     }
-    bestEffortDump(healthplix, `(clinic ${clinicId})`); // fire-and-forget
+    // Authenticated path: raw fallback dump AND the mapped-doc push into Clinica documents.
+    bestEffortDumpAndSync(healthplix, clinicId, String(accountId), `(clinic ${clinicId})`); // fire-and-forget
 
     // Token-free receipt log (never print the JWT). Confirms the push arrived + was stored.
     console.log(
