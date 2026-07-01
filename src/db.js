@@ -106,3 +106,26 @@ export async function deletePending(accountId) {
   if (!existing?._rev) return;
   await couch('DELETE', `/${encodeURIComponent(existing._id)}?rev=${existing._rev}`);
 }
+
+// --- Intake data dump storage (HealthPlix patients + appointments) ---
+
+const intakeId = (branchId) => `healthplix:intake:${branchId}`;
+
+export async function getIntakeDump(branchId) {
+  return couch('GET', `/${encodeURIComponent(intakeId(branchId))}`);
+}
+
+export async function storeIntakeDump(branchId, payload) {
+  const existing = await getIntakeDump(branchId);
+  const doc = {
+    ...(existing ?? {}),
+    _id: intakeId(branchId),
+    type: 'healthplix_intake_dump',
+    branchId,
+    ...payload,
+    updatedAt: new Date().toISOString(),
+  };
+  if (existing?._rev) doc._rev = existing._rev;
+  const r = await couch('PUT', `/${encodeURIComponent(doc._id)}`, doc);
+  return { ...doc, _rev: r.rev };
+}

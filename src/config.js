@@ -13,4 +13,10 @@ export const config = {
   // chrome-extension://<id>); when unset, only the shared key is enforced.
   intakeKey: process.env.INTAKE_KEY || '',
   intakeAllowedOrigin: process.env.INTAKE_ALLOWED_ORIGIN || '',
+
+  // Data-dump window (days around today, IST) + throttle so repeated credential pushes
+  // don't re-dump constantly.
+  dumpDaysBack: Number(process.env.DUMP_DAYS_BACK) || 7,
+  dumpDaysFwd: Number(process.env.DUMP_DAYS_FWD) || 30,
+  dumpMinIntervalMs: (Number(process.env.DUMP_MIN_INTERVAL_MIN) || 60) * 60 * 1000,
 };
