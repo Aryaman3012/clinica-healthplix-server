@@ -44,13 +44,18 @@ function headers(auth, extra = {}) {
 }
 
 // Authenticated fetch against the HealthPlix API for a given clinic.
+async function throwHttp(res, path) {
+  const body = await res.text().catch(() => '');
+  throw new Error(`HealthPlix API ${res.status} ${path}: ${body.slice(0, 300)}`);
+}
+
 export async function apiFetch(clinicId, path, options = {}) {
   const auth = await getAuth(clinicId);
   const res = await fetch(`${BASE}${path}`, {
     ...options,
     headers: { ...headers(auth), ...(options.headers ?? {}) },
   });
-  if (!res.ok) throw new Error(`HealthPlix API ${res.status}: ${path}`);
+  if (!res.ok) await throwHttp(res, path);
   return res.json();
 }
 
@@ -60,7 +65,7 @@ export async function fetchJson(healthplix, path, options = {}) {
     ...options,
     headers: { ...headers(healthplix), ...(options.headers ?? {}) },
   });
-  if (!res.ok) throw new Error(`HealthPlix API ${res.status}: ${path}`);
+  if (!res.ok) await throwHttp(res, path);
   return res.json();
 }
 
