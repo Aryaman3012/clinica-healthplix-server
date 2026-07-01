@@ -23,6 +23,14 @@ export async function registerWithClinica(clinicaJwt, accountId, accountData) {
   }
 
   const { data } = await res.json();
+  // Diagnostic: surface exactly what clinica-portal returned so we can tell whether a usable
+  // stream token came back (esp. in the alreadyLinked=true case). Token value is redacted.
+  const tok = data?.token;
+  console.log(
+    `[register] response keys=[${Object.keys(data ?? {}).join(',')}] ` +
+      `token=${tok ? `present(${String(tok).length}ch …${String(tok).slice(-4)})` : 'MISSING'} ` +
+      `alreadyLinked=${data?.alreadyLinked}`,
+  );
   return data; // { token, alreadyLinked }
 }
 

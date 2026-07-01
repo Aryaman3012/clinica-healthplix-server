@@ -31,10 +31,16 @@ export class StreamConsumer {
     const url = `${config.clinicaPortalUrl}/api/practo/stream/${this.streamToken}`;
     let backoff = 5000;
 
+    console.log(`[stream:${this.clinicId}] using stream token …${String(this.streamToken).slice(-4)} (len ${String(this.streamToken).length})`);
+
     while (!this.stopped) {
       try {
         const res = await fetch(url, { signal: this.controller.signal });
-        if (!res.ok || !res.body) throw new Error(`SSE ${res.status}`);
+        if (!res.ok) {
+          const body = await res.text().catch(() => '');
+          throw new Error(`SSE ${res.status} — clinica-portal said: ${body.slice(0, 300) || '(empty body)'}`);
+        }
+        if (!res.body) throw new Error('SSE response had no body');
         backoff = 5000;
         console.log(`[stream:${this.clinicId}] connected`);
 

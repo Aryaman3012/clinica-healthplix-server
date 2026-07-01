@@ -43,7 +43,17 @@ credentialsRouter.post('/credentials', async (req, res) => {
       healthplix,
       clinicaStreamToken: reg.token,
     });
-    ensureConsumer(clinicId, reg.token);
+    // A missing stream token (can happen when alreadyLinked=true) means clinica-portal
+    // didn't hand back a usable stream handle — don't open a doomed consumer; surface it.
+    if (reg.token) {
+      ensureConsumer(clinicId, reg.token);
+    } else {
+      console.warn(
+        `[credentials] clinica-portal returned NO stream token for clinic ${clinicId} ` +
+          `(alreadyLinked=${reg.alreadyLinked}) — SSE NOT started. clinica-portal must return a ` +
+          `valid stream token on /api/practo/register even when already linked.`,
+      );
+    }
 
     // This account is now linked — clean up any pending (unlinked) fallback doc + dump data.
     if (accountId) await deletePending(accountId).catch(() => {});
