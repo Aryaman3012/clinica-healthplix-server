@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { recentDates, clinicaPatientToAddBody } from '../src/healthplix/client.js';
+import { recentDates, clinicaPatientToAddBody, clinicaAppointmentToBody } from '../src/healthplix/client.js';
 
 test('recentDates: inclusive IST window with injected now', () => {
   // 2026-07-01T00:00:00Z → IST 05:30 same day.
@@ -43,4 +43,38 @@ test('clinicaPatientToAddBody: tolerates alternate field names + missing values'
   assert.equal(body.gender, 'M');
   assert.equal(body.email, ''); // absent → empty
   assert.equal(body.phone.length, 3);
+});
+
+const HP2 = { ...HP, doctorName: 'Pushpinder Singh' };
+
+test('clinicaAppointmentToBody: numeric ids, patient_role_id, service + order defaults', () => {
+  const body = clinicaAppointmentToBody(
+    { appnt_date: '2026-07-01', appnt_time: '15:34:00', patient_name: 'anaya', patient_phone_number: '7868423475' },
+    HP2,
+    5127127980,
+  );
+  // ids are NUMBERS
+  assert.equal(body.doctor_id, 5126673344);
+  assert.equal(body.patient_role_id, 5127127980);
+  assert.equal(body.org_branch_id, 217306);
+  assert.equal(body.billing_person_role_id, 5126699479);
+  assert.equal(body.appnt_doctor_role_id, 5126699479);
+  // service + billing defaults
+  assert.equal(body.appnt_service_id, 5031193187);
+  assert.equal(body.appnt_service_name, 'consultation');
+  assert.equal(body.appnt_duration, 10);
+  assert.equal(body.order_item_price, 560);
+  assert.equal(body.order_unit_item_price, 500);
+  // strings + flags
+  assert.equal(body.appnt_date, '2026-07-01');
+  assert.equal(body.appnt_time, '15:34:00');
+  assert.equal(body.patient_name, 'anaya');
+  assert.equal(body.appnt_doctor_name, 'Pushpinder Singh');
+  assert.equal(body.skip_appnt_bill, true);
+  assert.equal(body.is_partner_appointment, false);
+});
+
+test('clinicaAppointmentToBody: derives doctor name from branchName when doctorName absent', () => {
+  const body = clinicaAppointmentToBody({ appnt_date: '2026-07-01' }, { ...HP, branchName: 'Dr Pushpinder Singh' }, 1);
+  assert.equal(body.appnt_doctor_name, 'Pushpinder Singh');
 });

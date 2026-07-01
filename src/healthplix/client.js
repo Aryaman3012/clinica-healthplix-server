@@ -3,14 +3,21 @@
 //   GET  /v2/appointments?appnt_date&doctor_role_id&doctor_id&org_branch_id → { appointments }
 //   POST /patient/search  { branch_id, doctor_id, doctor_role_id, term, limit } → { persons }
 //   POST /v1/patient/add  { name, phone, gender, …, doctor_role_id, doctor_id, org_branch_id, token }
-// Implemented: dumpHealthplixData (patients + appointments), pushPatientToHealthplix
-// (find-or-create). STILL BLOCKED: pushAppointmentToHealthplix (no create-appointment endpoint yet).
+//   POST /v1/appointment  { doctor_id, patient_role_id, org_branch_id, appnt_date/time, service…, order… }
+// Implemented: dumpHealthplixData, pushPatientToHealthplix (find-or-create),
+// pushAppointmentToHealthplix (find-or-create patient → create appointment).
 
 import { config } from '../config.js';
 import { getCredentials, getIntakeDump, storeIntakeDump } from '../db.js';
 
 const BASE = config.healthplixApiBase;
 const WEB_APP_URL = config.healthplixWebApp;
+
+// Defaults for the consultation service + its billing line, taken from a real booking.
+// Wire a services endpoint later if pricing/service must vary per appointment.
+const DEFAULT_SERVICE = { id: 5031193187, name: 'consultation' };
+const DEFAULT_APPT_DURATION = 10;
+const DEFAULT_ORDER = { item_price: 560, service_tax: 60, unit_price: 500 };
 
 // Load + validate the stored HealthPlix auth for a clinic.
 async function getAuth(clinicId) {
@@ -79,6 +86,11 @@ const g = (obj, ...keys) => {
   return undefined;
 };
 
+const num = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
 function mapGender(v) {
   const s = String(v ?? '').trim().toUpperCase();
   if (s.startsWith('M')) return 'M';
@@ -93,7 +105,7 @@ function mapGender(v) {
 export function clinicaPatientToAddBody(patient, hp) {
   return {
     name: g(patient, 'name', 'full_name', 'patient_name') ?? '',
-    phone: String(g(patient, 'phone', 'mobile', 'phone_number', 'contact') ?? ''),
+    phone: String(g(patient, 'phone', 'mobile', 'phone_number', 'contact', 'patient_phone_number', 'patient_phone') ?? ''),
     gender: mapGender(g(patient, 'gender', 'sex')),
     honorific: '',
     patient_preferred_language: 'en',
@@ -118,43 +130,97 @@ export function clinicaPatientToAddBody(patient, hp) {
   };
 }
 
-// Find-or-create a HealthPlix patient for a Clinica patient. Returns { personId, created }.
-export async function pushPatientToHealthplix(clinicId, patient) {
-  const doc = await getCredentials(clinicId);
-  const hp = doc?.healthplix;
-  if (!hp?.token || doc?.revoked) throw new Error(`No HealthPlix credentials for clinic ${clinicId}`);
+// Search a patient by phone, returning the HealthPlix person or null.
+async function findPatientByPhone(hp, phone, ids) {
+  if (!phone) return null;
+  const s = await fetchJson(hp, '/patient/search', {
+    method: 'POST',
+    body: JSON.stringify({ branch_id: ids.org_branch_id, doctor_id: ids.doctor_id, doctor_role_id: ids.doctor_role_id, term: phone, limit: 30 }),
+  });
+  return (s?.persons ?? []).find((p) => String(p.org_person_phone) === String(phone)) ?? null;
+}
 
-  const body = clinicaPatientToAddBody(patient, hp);
+// Find-or-create a HealthPlix patient. Returns { personId, personRoleId, created }.
+// personRoleId (person_role_id) is what an appointment needs as patient_role_id.
+async function findOrCreatePatient(hp, patientInput) {
+  const body = clinicaPatientToAddBody(patientInput, hp);
+  const ids = { org_branch_id: body.org_branch_id, doctor_id: body.doctor_id, doctor_role_id: body.doctor_role_id };
 
-  // Dedup by phone via /patient/search before creating.
-  if (body.phone) {
-    const s = await fetchJson(hp, '/patient/search', {
-      method: 'POST',
-      body: JSON.stringify({
-        branch_id: body.org_branch_id, doctor_id: body.doctor_id, doctor_role_id: body.doctor_role_id,
-        term: body.phone, limit: 30,
-      }),
-    });
-    const existing = (s?.persons ?? []).find((p) => String(p.org_person_phone) === String(body.phone));
-    if (existing) {
-      console.log(`[push] patient exists (person_id ${existing.person_id}) — skipping create`);
-      return { personId: existing.person_id, created: false };
-    }
+  const existing = await findPatientByPhone(hp, body.phone, ids);
+  if (existing) {
+    return { personId: existing.person_id, personRoleId: existing.person_role_id, created: false };
   }
 
   const res = await fetchJson(hp, '/v1/patient/add', { method: 'POST', body: JSON.stringify(body) });
-  console.log('[push] patient created on HealthPlix');
-  return { personId: res?.person_id ?? res?.data?.person_id ?? null, created: true, res };
+  let personId = res?.person_id ?? res?.data?.person_id ?? null;
+  let personRoleId = res?.person_role_id ?? res?.data?.person_role_id ?? null;
+
+  // If the add response didn't surface ids, re-search to resolve the freshly created patient.
+  if (!personRoleId && body.phone) {
+    const fresh = await findPatientByPhone(hp, body.phone, ids);
+    if (fresh) { personId = fresh.person_id; personRoleId = fresh.person_role_id; }
+  }
+  return { personId, personRoleId, created: true };
 }
 
-// --- Appointment write (BLOCKED) -------------------------------------------------------
+// A Clinica appointment may nest the patient or carry patient_* fields inline.
+function extractPatient(appointment) {
+  return appointment && typeof appointment.patient === 'object' && appointment.patient
+    ? appointment.patient
+    : appointment;
+}
 
+// Clinica appointment (SSE appointment.upserted payload) → HealthPlix POST /v1/appointment body.
+// ASSUMPTION: Clinica field names (appnt_date/time/duration/service…). Verify against a real
+// appointment.upserted payload and adjust the g(...) key lists. Ids are numbers here.
+export function clinicaAppointmentToBody(appointment, hp, patientRoleId) {
+  const date = g(appointment, 'appnt_date', 'date', 'appointment_date') ?? istDateStr(Date.now());
+  const doctorName =
+    hp.doctorName || String(hp.branchName ?? '').replace(/^dr\.?\s*/i, '') || '';
+  return {
+    doctor_id: num(hp.doctorId),
+    patient_role_id: num(patientRoleId),
+    org_branch_id: num(hp.branchId),
+    billing_person_role_id: num(hp.doctorRoleId),
+    appnt_date: String(date),
+    patient_name: g(appointment, 'patient_name', 'name') ?? '',
+    patient_phone_number: String(g(appointment, 'patient_phone_number', 'patient_phone', 'phone', 'mobile') ?? ''),
+    appnt_doctor_name: doctorName,
+    appnt_doctor_role_id: num(hp.doctorRoleId),
+    appnt_duration: num(g(appointment, 'appnt_duration', 'duration') ?? DEFAULT_APPT_DURATION),
+    appnt_service_id: num(g(appointment, 'appnt_service_id', 'service_id') ?? DEFAULT_SERVICE.id),
+    appnt_service_name: g(appointment, 'appnt_service_name', 'service_name') ?? DEFAULT_SERVICE.name,
+    appnt_status: num(g(appointment, 'appnt_status', 'status') ?? 0),
+    appnt_time: String(g(appointment, 'appnt_time', 'time', 'appointment_time') ?? '00:00:00'),
+    skip_appnt_bill: true,
+    order_date: String(g(appointment, 'order_date', 'appnt_date', 'date') ?? date),
+    item_quantity: 1,
+    order_item_discount: num(g(appointment, 'order_item_discount') ?? 0),
+    order_item_price: num(g(appointment, 'order_item_price') ?? DEFAULT_ORDER.item_price),
+    order_item_service_tax: num(g(appointment, 'order_item_service_tax') ?? DEFAULT_ORDER.service_tax),
+    order_unit_item_price: num(g(appointment, 'order_unit_item_price') ?? DEFAULT_ORDER.unit_price),
+    is_partner_appointment: false,
+  };
+}
+
+// Find-or-create a HealthPlix patient for a Clinica patient. Returns { personId, personRoleId, created }.
+export async function pushPatientToHealthplix(clinicId, patient) {
+  const hp = await getAuth(clinicId);
+  const r = await findOrCreatePatient(hp, patient);
+  console.log(r.created ? `[push] patient created (person_role_id ${r.personRoleId})` : `[push] patient exists (person_role_id ${r.personRoleId})`);
+  return r;
+}
+
+// Create an appointment on HealthPlix: ensure the patient exists, then POST /v1/appointment.
 export async function pushAppointmentToHealthplix(clinicId, appointment) {
-  // The endpoints provided (GET /v2/appointments, POST /appointments/get) are READS.
-  // A create/save-appointment endpoint is still needed — capture the request HealthPlix
-  // fires when you BOOK/SAVE an appointment in md.healthplix.com and wire it here
-  // (find-or-create patient via pushPatientToHealthplix, then POST the appointment).
-  throw new Error('pushAppointmentToHealthplix not implemented — need the HealthPlix create-appointment endpoint');
+  const hp = await getAuth(clinicId);
+  const { personRoleId } = await findOrCreatePatient(hp, extractPatient(appointment));
+  if (!personRoleId) throw new Error('could not resolve patient_role_id for appointment');
+
+  const body = clinicaAppointmentToBody(appointment, hp, personRoleId);
+  const res = await fetchJson(hp, '/v1/appointment', { method: 'POST', body: JSON.stringify(body) });
+  console.log(`[push] appointment created on HealthPlix (patient_role_id ${personRoleId})`);
+  return { res };
 }
 
 // --- Intake data dump ------------------------------------------------------------------
