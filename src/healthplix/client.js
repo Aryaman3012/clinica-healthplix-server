@@ -111,8 +111,7 @@ function mapGender(v) {
   const s = String(v ?? '').trim().toUpperCase();
   if (s.startsWith('M')) return 'M';
   if (s.startsWith('F')) return 'F';
-  if (s.startsWith('O')) return 'O';
-  return '';
+  return 'O'; // HealthPlix requires M/F/O — default unknown/empty → Other (matches hotfix)
 }
 
 // Map a Clinica patient (from the SSE patient.upserted payload) → HealthPlix /v1/patient/add
