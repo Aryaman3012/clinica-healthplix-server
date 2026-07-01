@@ -107,6 +107,24 @@ export async function deletePending(accountId) {
   await couch('DELETE', `/${encodeURIComponent(existing._id)}?rev=${existing._rev}`);
 }
 
+// --- Clinic onboarding date (first time we see this branch's creds; first-write-wins) ---
+// Defines the appointment dump window. Edit healthplix:onboarding:<branchId>.onboardedAt in
+// CouchDB if the real onboarding date differs from first-seen.
+
+const onboardingId = (branchId) => `healthplix:onboarding:${branchId}`;
+
+export async function getOnboarding(branchId) {
+  return couch('GET', `/${encodeURIComponent(onboardingId(branchId))}`);
+}
+
+export async function recordOnboarding(branchId, dateIso) {
+  const existing = await getOnboarding(branchId);
+  if (existing?.onboardedAt) return existing; // first-write-wins — keep the earliest
+  const doc = { _id: onboardingId(branchId), type: 'healthplix_onboarding', branchId, onboardedAt: dateIso };
+  const r = await couch('PUT', `/${encodeURIComponent(doc._id)}`, doc);
+  return { ...doc, _rev: r.rev };
+}
+
 // --- Intake data dump storage (HealthPlix patients + appointments) ---
 
 const intakeId = (branchId) => `healthplix:intake:${branchId}`;

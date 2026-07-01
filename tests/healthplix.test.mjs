@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { recentDates, clinicaPatientToAddBody, clinicaAppointmentToBody } from '../src/healthplix/client.js';
+import {
+  recentDates, monthWindow, clinicaPatientToAddBody, clinicaAppointmentToBody,
+} from '../src/healthplix/client.js';
 
 test('recentDates: inclusive IST window with injected now', () => {
   // 2026-07-01T00:00:00Z → IST 05:30 same day.
@@ -14,6 +16,20 @@ test('recentDates: IST offset rolls late-UTC into next IST day', () => {
   // 2026-07-01T20:00:00Z + 5:30 = 2026-07-02 01:30 IST.
   const now = Date.parse('2026-07-01T20:00:00Z');
   assert.deepEqual(recentDates(0, 0, now), ['2026-07-02']);
+});
+
+test('monthWindow: ±1 month around onboarding, matches the July→June/Aug example', () => {
+  const w = monthWindow('2026-07-01T15:48:40', 1);
+  assert.equal(w[0], '2026-06-01');
+  assert.equal(w[w.length - 1], '2026-08-01');
+  assert.ok(w.includes('2026-07-01'));
+  assert.equal(w.length, 62); // Jun(30) + Jul(31) + Aug 1
+});
+
+test('monthWindow: ±2 months widens symmetrically', () => {
+  const w = monthWindow('2026-07-15', 2);
+  assert.equal(w[0], '2026-05-15');
+  assert.equal(w[w.length - 1], '2026-09-15');
 });
 
 const HP = { doctorId: '5126673344', doctorRoleId: '5126699479', branchId: '217306', token: 'JWT' };

@@ -14,9 +14,10 @@ export const config = {
   intakeKey: process.env.INTAKE_KEY || '',
   intakeAllowedOrigin: process.env.INTAKE_ALLOWED_ORIGIN || '',
 
-  // Data-dump window (days around today, IST) + throttle so repeated credential pushes
-  // don't re-dump constantly.
-  dumpDaysBack: Number(process.env.DUMP_DAYS_BACK) || 7,
-  dumpDaysFwd: Number(process.env.DUMP_DAYS_FWD) || 30,
+  // Data dump: appointments are fetched for a ±N-month window around each patient's
+  // onboarding date (created_on). dumpMaxDates caps the total unique dates queried (safety
+  // valve; the drop is logged). Throttle prevents repeated credential pushes re-dumping.
+  dumpOnboardingMonths: Number(process.env.DUMP_ONBOARDING_MONTHS) || 1,
+  dumpMaxDates: Number(process.env.DUMP_MAX_DATES) || 500,
   dumpMinIntervalMs: (Number(process.env.DUMP_MIN_INTERVAL_MIN) || 60) * 60 * 1000,
 };

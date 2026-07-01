@@ -8,7 +8,7 @@
 // pushAppointmentToHealthplix (find-or-create patient → create appointment).
 
 import { config } from '../config.js';
-import { getCredentials, getIntakeDump, storeIntakeDump } from '../db.js';
+import { getCredentials, getIntakeDump, storeIntakeDump, getOnboarding, recordOnboarding } from '../db.js';
 
 const BASE = config.healthplixApiBase;
 const WEB_APP_URL = config.healthplixWebApp;
@@ -81,6 +81,17 @@ function istDateStr(ms) {
 export function recentDates(back, fwd, now = Date.now()) {
   const out = [];
   for (let i = -back; i <= fwd; i++) out.push(istDateStr(now + i * 86400000));
+  return out;
+}
+
+// Inclusive daily date list for a ±`months` calendar-month window around a date.
+// e.g. monthWindow('2026-07-01', 1) → ['2026-06-01' … '2026-08-01'].
+export function monthWindow(dateStr, months = 1) {
+  const [y, m, d] = String(dateStr).slice(0, 10).split('-').map(Number);
+  const from = Date.UTC(y, m - 1 - months, d);
+  const to = Date.UTC(y, m - 1 + months, d);
+  const out = [];
+  for (let t = from; t <= to; t += 86400000) out.push(new Date(t).toISOString().slice(0, 10));
   return out;
 }
 
@@ -233,6 +244,24 @@ export async function pushAppointmentToHealthplix(clinicId, appointment) {
 // patients + appointments (over a date window) using the given creds and stores them to
 // CouchDB, independent of Clinica linking. Throttled so repeated pushes don't re-dump.
 
+// Best-effort patient list. NOTE: /patient/search can't reliably enumerate all patients
+// (empty term with a large limit returns 0). Until a dedicated patients-list endpoint is
+// wired in, this returns a capped subset only — patientsPartial:true is stored to flag it.
+async function listPatientsBestEffort(healthplix, ids) {
+  try {
+    const ps = await fetchJson(healthplix, '/patient/search', {
+      method: 'POST',
+      body: JSON.stringify({ ...ids, term: '', limit: 50 }),
+    });
+    return ps?.persons ?? [];
+  } catch (e) {
+    console.warn('[intake] patient list failed:', e.message);
+    return [];
+  }
+}
+
+// Dump appointments for the clinic's onboarding window (±dumpOnboardingMonths around the
+// branch's onboarding date) plus a best-effort patient list, to CouchDB.
 export async function dumpHealthplixData(healthplix) {
   const doctorId = String(healthplix.doctorId ?? '');
   const doctorRoleId = String(healthplix.doctorRoleId ?? '');
@@ -245,25 +274,52 @@ export async function dumpHealthplixData(healthplix) {
     return { skipped: true };
   }
 
-  // Patients (term '' lists them).
-  const psearch = await fetchJson(healthplix, '/patient/search', {
-    method: 'POST',
-    body: JSON.stringify({ branch_id: branchId, doctor_id: doctorId, doctor_role_id: doctorRoleId, term: '', limit: 1000 }),
-  });
-  const patients = psearch?.persons ?? [];
+  // Onboarding date defines the window (first-seen; record now if we've never seen it).
+  let ob = await getOnboarding(branchId);
+  if (!ob?.onboardedAt) ob = await recordOnboarding(branchId, new Date().toISOString());
+  const onboardedAt = ob.onboardedAt;
 
-  // Appointments over the configured date window.
-  const dates = recentDates(config.dumpDaysBack, config.dumpDaysFwd);
+  // Appointments over ±months around onboarding.
+  const months = config.dumpOnboardingMonths;
+  let dates = monthWindow(onboardedAt, months);
+  let truncated = false;
+  if (dates.length > config.dumpMaxDates) {
+    truncated = true;
+    console.warn(`[intake] ${dates.length} window dates exceed cap ${config.dumpMaxDates} — truncating`);
+    dates = dates.slice(0, config.dumpMaxDates);
+  }
+
+  const seen = new Set();
   const appointments = [];
   for (const d of dates) {
     const r = await fetchJson(
       healthplix,
       `/v2/appointments?appnt_date=${d}&doctor_role_id=${doctorRoleId}&doctor_id=${doctorId}&org_branch_id=${branchId}`,
     );
-    for (const a of r?.appointments ?? []) appointments.push(a);
+    for (const a of r?.appointments ?? []) {
+      const id = a.appnt_id ?? JSON.stringify(a);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      appointments.push({ ...a, _appnt_date: d });
+    }
   }
 
-  await storeIntakeDump(branchId, { patients, appointments, dates, dumpedAt: new Date().toISOString() });
-  console.log(`[intake] dumped ${patients.length} patients + ${appointments.length} appointments for branch ${branchId}`);
-  return { patients: patients.length, appointments: appointments.length };
+  const patients = await listPatientsBestEffort(healthplix, { branch_id: branchId, doctor_id: doctorId, doctor_role_id: doctorRoleId });
+
+  await storeIntakeDump(branchId, {
+    onboardedAt,
+    windowMonths: months,
+    windowFrom: dates[0],
+    windowTo: dates[dates.length - 1],
+    truncated,
+    appointments,
+    patients,
+    patientsPartial: true,
+    dumpedAt: new Date().toISOString(),
+  });
+  console.log(
+    `[intake] dumped ${appointments.length} appointments (${dates[0]}…${dates[dates.length - 1]}, ` +
+      `±${months}mo of onboarding ${String(onboardedAt).slice(0, 10)}) + ${patients.length} patients (partial) for branch ${branchId}`,
+  );
+  return { appointments: appointments.length, patients: patients.length, windowFrom: dates[0], windowTo: dates[dates.length - 1], truncated };
 }

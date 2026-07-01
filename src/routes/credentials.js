@@ -6,7 +6,7 @@
 import { Router } from 'express';
 import { registerWithClinica } from '../clinica/register.js';
 import { clinicIdFromJwt } from '../jwt.js';
-import { upsertCredentials, revokeCredentials, getCredentials, deletePending } from '../db.js';
+import { upsertCredentials, revokeCredentials, getCredentials, deletePending, recordOnboarding } from '../db.js';
 import { ensureConsumer, stopConsumer } from '../manager.js';
 import { bestEffortDump } from '../dump.js';
 
@@ -56,7 +56,10 @@ credentialsRouter.post('/credentials', async (req, res) => {
     }
 
     // This account is now linked — clean up any pending (unlinked) fallback doc + dump data.
-    if (accountId) await deletePending(accountId).catch(() => {});
+    if (accountId) {
+      await recordOnboarding(String(accountId), new Date().toISOString()); // first-seen = onboarding
+      await deletePending(accountId).catch(() => {});
+    }
     bestEffortDump(healthplix, `(clinic ${clinicId})`); // fire-and-forget
 
     // Token-free receipt log (never print the JWT). Confirms the push arrived + was stored.

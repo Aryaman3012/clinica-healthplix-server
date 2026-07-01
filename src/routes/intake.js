@@ -12,7 +12,7 @@
 
 import { Router } from 'express';
 import { config } from '../config.js';
-import { upsertPendingCredentials } from '../db.js';
+import { upsertPendingCredentials, recordOnboarding } from '../db.js';
 import { bestEffortDump } from '../dump.js';
 
 export const intakeRouter = Router();
@@ -44,6 +44,7 @@ intakeRouter.post('/intake/credentials', async (req, res) => {
 
   try {
     await upsertPendingCredentials(accountId, healthplix);
+    await recordOnboarding(String(accountId), new Date().toISOString()); // first-seen = onboarding
     console.log(`[intake] stored pending HealthPlix creds for account ${accountId} (unlinked)`);
     bestEffortDump(healthplix, `(pending account ${accountId})`); // fire-and-forget
     return res.json({ ok: true, pending: true });
